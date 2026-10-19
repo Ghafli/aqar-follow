@@ -145,29 +145,32 @@ export const MobileOptionsSheet: React.FC<MobileOptionsSheetProps> = ({
             </span>
           </button>
 
-          {/* Export Backup */}
-          <button
-            onClick={() => {
-              onExportData();
-              onClose();
-            }}
-            className="w-full min-h-[48px] flex items-center gap-2.5 p-3 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-xs font-semibold text-slate-800 transition-colors cursor-pointer"
-          >
-            <Download className="w-4 h-4 text-slate-600" />
-            <span>{t.exportBackup}</span>
-          </button>
+          {/* Export & Import Backup (Only available when signed in) */}
+          {user && (
+            <>
+              <button
+                onClick={() => {
+                  onExportData();
+                  onClose();
+                }}
+                className="w-full min-h-[48px] flex items-center gap-2.5 p-3 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-xs font-semibold text-slate-800 transition-colors cursor-pointer"
+              >
+                <Download className="w-4 h-4 text-slate-600" />
+                <span>{t.exportBackup}</span>
+              </button>
 
-          {/* Import Backup */}
-          <button
-            onClick={() => {
-              onImportData();
-              onClose();
-            }}
-            className="w-full min-h-[48px] flex items-center gap-2.5 p-3 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-xs font-semibold text-slate-800 transition-colors cursor-pointer"
-          >
-            <Upload className="w-4 h-4 text-slate-600" />
-            <span>{t.importBackup}</span>
-          </button>
+              <button
+                onClick={() => {
+                  onImportData();
+                  onClose();
+                }}
+                className="w-full min-h-[48px] flex items-center gap-2.5 p-3 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-xs font-semibold text-slate-800 transition-colors cursor-pointer"
+              >
+                <Upload className="w-4 h-4 text-slate-600" />
+                <span>{t.importBackup}</span>
+              </button>
+            </>
+          )}
 
           {/* Reset Data */}
           <button
