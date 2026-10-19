@@ -1,12 +1,17 @@
 import React from 'react';
-import { Building2, Globe, Plus, Download, Upload, RotateCcw } from 'lucide-react';
-import { Language } from '../types';
+import { Building2, Globe, Plus, Download, Upload, RotateCcw, LogIn, LogOut, Database, User as UserIcon } from 'lucide-react';
+import { Language, AuthUser } from '../types';
 import { translations } from '../utils/translations';
+import { isSupabaseConfigured } from '../services/supabase';
 
 interface HeaderProps {
   language: Language;
+  user: AuthUser | null;
   onToggleLanguage: () => void;
   onOpenAddTenant: () => void;
+  onOpenAuth: () => void;
+  onSignOut: () => void;
+  onOpenSupabaseConfig: () => void;
   onExportData: () => void;
   onImportData: () => void;
   onResetData: () => void;
@@ -14,8 +19,12 @@ interface HeaderProps {
 
 export const Header: React.FC<HeaderProps> = ({
   language,
+  user,
   onToggleLanguage,
   onOpenAddTenant,
+  onOpenAuth,
+  onSignOut,
+  onOpenSupabaseConfig,
   onExportData,
   onImportData,
   onResetData,
@@ -41,8 +50,26 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           </div>
 
-          {/* Zone 2: Auxiliary actions (Backup / Reset) - Desktop only */}
+          {/* Zone 2: Supabase Connection Badge & Auxiliary actions */}
           <div className="hidden md:flex items-center gap-2 text-xs font-medium text-slate-600">
+            {/* Supabase Status Chip */}
+            <button
+              onClick={onOpenSupabaseConfig}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-all cursor-pointer ${
+                isSupabaseConfigured
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200/80 hover:bg-emerald-100'
+                  : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100 animate-pulse'
+              }`}
+              title={isSupabaseConfigured ? (language === 'ar' ? 'متصل بقاعدة Supabase' : 'Connected to Supabase') : (language === 'ar' ? 'ربط Supabase' : 'Connect Supabase')}
+            >
+              <Database className="w-3.5 h-3.5 text-emerald-600" />
+              <span>
+                {isSupabaseConfigured
+                  ? (language === 'ar' ? 'قاعدة Supabase: متصل' : 'Supabase: Live')
+                  : (language === 'ar' ? 'ربط قاعدة Supabase' : 'Connect Supabase')}
+              </span>
+            </button>
+
             <button
               onClick={onExportData}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md hover:bg-slate-100 hover:text-slate-900 transition-colors cursor-pointer"
@@ -59,33 +86,70 @@ export const Header: React.FC<HeaderProps> = ({
               <Upload className="w-3.5 h-3.5 text-slate-500" />
               <span>{t.importBackup}</span>
             </button>
-            <button
-              onClick={onResetData}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md hover:bg-slate-100 hover:text-slate-900 transition-colors cursor-pointer"
-              title={t.resetData}
-            >
-              <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
-              <span>{t.resetData}</span>
-            </button>
           </div>
 
-          {/* Zone 3: Language Toggle & Desktop Primary CTA Button */}
+          {/* Zone 3: Language Toggle, User Auth & Desktop Primary CTA Button */}
           <div className="flex items-center gap-2 shrink-0">
+            {/* Supabase status icon for mobile */}
+            <button
+              onClick={onOpenSupabaseConfig}
+              className={`md:hidden inline-flex items-center justify-center w-10 h-10 rounded-xl border transition-colors cursor-pointer ${
+                isSupabaseConfigured
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : 'bg-amber-50 text-amber-700 border-amber-200'
+              }`}
+              title={isSupabaseConfigured ? 'Supabase Connected' : 'Connect Supabase'}
+            >
+              <Database className="w-4 h-4" />
+            </button>
+
+            {/* Language Toggle */}
             <button
               onClick={onToggleLanguage}
-              className="inline-flex items-center justify-center gap-1.5 px-3 h-10 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 bg-slate-50 hover:bg-slate-100 transition-colors active:scale-95 cursor-pointer"
+              className="inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3 h-10 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 bg-slate-50 hover:bg-slate-100 transition-colors active:scale-95 cursor-pointer"
               aria-label={t.languageLabel}
             >
               <Globe className="w-4 h-4 text-emerald-600" />
               <span>{t.languageToggle}</span>
             </button>
 
-            {/* Desktop Add Tenant Button (hidden on mobile, mobile has floating center tab) */}
+            {/* User Auth Chip / Button */}
+            {user ? (
+              <div className="flex items-center gap-1.5 p-1 ps-2 bg-slate-100/90 rounded-xl border border-slate-200/80">
+                <div className="w-6 h-6 rounded-lg bg-emerald-600 text-white flex items-center justify-center text-[11px] font-bold overflow-hidden shrink-0">
+                  {user.avatarUrl ? (
+                    <img src={user.avatarUrl} alt={user.name} className="w-full h-full object-cover" />
+                  ) : (
+                    <span>{(user.name || user.email || 'U')[0].toUpperCase()}</span>
+                  )}
+                </div>
+                <span className="text-xs font-semibold text-slate-800 max-w-[100px] sm:max-w-[130px] truncate hidden sm:inline">
+                  {user.name || user.email}
+                </span>
+                <button
+                  onClick={onSignOut}
+                  className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-white rounded-lg transition-colors cursor-pointer"
+                  title={language === 'ar' ? 'تسجيل الخروج' : 'Sign Out'}
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={onOpenAuth}
+                className="inline-flex items-center gap-1.5 px-3 h-10 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-xs transition-all active:scale-95 cursor-pointer"
+              >
+                <LogIn className="w-4 h-4" />
+                <span className="truncate">{language === 'ar' ? 'تسجيل الدخول' : 'Sign In'}</span>
+              </button>
+            )}
+
+            {/* Desktop Add Tenant Button */}
             <button
               onClick={onOpenAddTenant}
-              className="hidden md:inline-flex items-center gap-2 px-4 py-2 text-xs sm:text-sm font-semibold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 active:bg-emerald-800 shadow-sm transition-all whitespace-nowrap cursor-pointer"
+              className="hidden md:inline-flex items-center gap-2 px-4 py-2 text-xs sm:text-sm font-semibold text-white bg-slate-900 rounded-xl hover:bg-slate-800 active:bg-slate-950 shadow-sm transition-all whitespace-nowrap cursor-pointer"
             >
-              <Plus className="w-4 h-4" />
+              <Plus className="w-4 h-4 text-emerald-400" />
               <span>{t.addTenant}</span>
             </button>
           </div>

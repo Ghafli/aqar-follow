@@ -21,6 +21,7 @@ export interface PaymentMilestone {
 
 export interface TenantRecord {
   id: string;
+  userId?: string;
   name: string;
   mobile: string; // e.g. +966501234567
   idNumber: string; // National ID, Iqama, or Commercial Registration
@@ -34,6 +35,13 @@ export interface TenantRecord {
   paidInstallments: number[]; // Array of installment numbers marked as paid
   createdAt: string;
   updatedAt: string;
+}
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  name?: string;
+  avatarUrl?: string;
 }
 
 export interface DashboardMetrics {

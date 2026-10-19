@@ -14,10 +14,16 @@ import {
   FileDown, 
   RotateCcw,
   AlertCircle,
-  CheckCircle2
+  CheckCircle2,
+  Lock,
+  LogIn,
+  Database,
+  ShieldCheck,
+  UserCheck,
+  Sparkles
 } from 'lucide-react';
 
-import { Language, PaymentStatus, TenantRecord, DashboardMetrics } from './types';
+import { Language, PaymentStatus, TenantRecord, DashboardMetrics, AuthUser } from './types';
 import { Header } from './components/Header';
 import { DashboardStats } from './components/DashboardStats';
 import { TenantCard } from './components/TenantCard';
@@ -28,18 +34,22 @@ import { NotesDrawer } from './components/NotesDrawer';
 import { WhatsAppModal } from './components/WhatsAppModal';
 import { MobileBottomNav } from './components/MobileBottomNav';
 import { MobileOptionsSheet } from './components/MobileOptionsSheet';
+import { AuthModal } from './components/AuthModal';
+import { SupabaseConfigModal } from './components/SupabaseConfigModal';
 
-import { INITIAL_SAMPLE_TENANTS } from './utils/sampleData';
 import { evaluateTenantStatus } from './utils/scheduleCalculator';
 import { translations } from './utils/translations';
 import { 
   isSupabaseConfigured, 
   fetchTenantsFromSupabase, 
   upsertTenantToSupabase, 
-  deleteTenantFromSupabase 
+  deleteTenantFromSupabase,
+  getSessionUser,
+  signOutUser,
+  onAuthStateChange,
+  signInWithGoogle
 } from './services/supabase';
 
-const STORAGE_KEY = 'aqar_tenants_storage_v1';
 const LANG_STORAGE_KEY = 'aqar_language_pref_v1';
 
 export default function App() {
@@ -62,49 +72,72 @@ export default function App() {
     setLanguage((prev) => (prev === 'ar' ? 'en' : 'ar'));
   };
 
-  // 2. Tenants state with LocalStorage persistence
-  const [tenants, setTenants] = useState<TenantRecord[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
-        }
-      }
-    } catch (e) {
-      console.error('Failed to parse saved tenants', e);
-    }
-    return INITIAL_SAMPLE_TENANTS;
-  });
+  // 2. User Authentication State
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [isAuthOpen, setIsAuthOpen] = useState(false);
+  const [isSupabaseConfigOpen, setIsSupabaseConfigOpen] = useState(false);
+  const [isDataLoading, setIsDataLoading] = useState(true);
 
-  // Sync to local storage on change
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(tenants));
-    } catch (e) {
-      console.error('Failed to save tenants to local storage', e);
-    }
-  }, [tenants]);
+  // 3. Tenants state - Starts strictly with ZERO data as requested (relies solely on live Supabase)
+  const [tenants, setTenants] = useState<TenantRecord[]>([]);
 
-  // Initial cloud sync if Supabase environment variables are provided
+  // Load tenants strictly belonging to current authenticated user
+  const loadUserTenants = async (userId?: string) => {
+    setIsDataLoading(true);
+    const data = await fetchTenantsFromSupabase(userId);
+    if (data !== null) {
+      setTenants(data);
+    } else {
+      setTenants([]);
+    }
+    setIsDataLoading(false);
+  };
+
+  // Auth session initialization & listener
   useEffect(() => {
     if (isSupabaseConfigured) {
-      fetchTenantsFromSupabase().then((data) => {
-        if (data && data.length > 0) {
-          setTenants(data);
-          showToast(language === 'ar' ? 'تمت المزامنة من Supabase سحابياً' : 'Synced from Supabase Cloud');
+      getSessionUser().then((currentUser) => {
+        setUser(currentUser);
+        if (currentUser) {
+          loadUserTenants(currentUser.id);
+        } else {
+          setTenants([]);
+          setIsDataLoading(false);
         }
       });
+
+      const unsubscribe = onAuthStateChange((newUser) => {
+        setUser(newUser);
+        if (newUser) {
+          loadUserTenants(newUser.id);
+        } else {
+          setTenants([]);
+          setIsDataLoading(false);
+        }
+      });
+
+      return () => {
+        if (unsubscribe) unsubscribe();
+      };
+    } else {
+      setIsDataLoading(false);
     }
   }, []);
 
-  // 3. Search & Filter State
+  // Handler: Sign out
+  const handleSignOut = async () => {
+    await signOutUser();
+    setUser(null);
+    setTenants([]);
+    showToast(language === 'ar' ? 'تم تسجيل الخروج بنجاح' : 'Signed out successfully');
+  };
+
+  // 4. Search & Filter State
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<PaymentStatus | 'all'>('all');
   const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
 
-  // 4. Modal & Drawer States
+  // 5. Modal & Drawer States
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingTenant, setEditingTenant] = useState<TenantRecord | null>(null);
 
@@ -122,7 +155,7 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 3000);
   };
 
-  // 5. Dashboard Metrics Calculation
+  // 6. Dashboard Metrics Calculation
   const metrics: DashboardMetrics = useMemo(() => {
     let overdueCount = 0;
     let dueSoonCount = 0;
@@ -156,7 +189,7 @@ export default function App() {
     };
   }, [tenants]);
 
-  // 6. Filtered Tenants List
+  // 7. Filtered Tenants List
   const filteredTenants = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
 
@@ -182,29 +215,39 @@ export default function App() {
     });
   }, [tenants, searchQuery, statusFilter]);
 
-  // 7. Handler: Add or Update Tenant
-  const handleSaveTenant = (
+  // 8. Handler: Add or Update Tenant
+  const handleSaveTenant = async (
     formData: Omit<TenantRecord, 'id' | 'notes' | 'paidInstallments' | 'createdAt' | 'updatedAt'>
   ) => {
+    if (!isSupabaseConfigured) {
+      setIsSupabaseConfigOpen(true);
+      return;
+    }
+
+    if (!user) {
+      setIsAuthOpen(true);
+      return;
+    }
+
     const nowIso = new Date().toISOString();
 
     if (editingTenant) {
-      const updated = {
+      const updated: TenantRecord = {
         ...editingTenant,
         ...formData,
+        userId: user.id,
         updatedAt: nowIso,
       };
       setTenants((prev) =>
         prev.map((t) => (t.id === editingTenant.id ? updated : t))
       );
-      if (isSupabaseConfigured) {
-        upsertTenantToSupabase(updated);
-      }
-      showToast(language === 'ar' ? 'تم تحديث بيانات المستأجر بنجاح' : 'Tenant details updated successfully');
+      await upsertTenantToSupabase(updated, user.id);
+      showToast(language === 'ar' ? 'تم تحديث بيانات المستأجر في Supabase' : 'Tenant details updated in Supabase');
     } else {
       const newTenant: TenantRecord = {
         ...formData,
         id: `tenant-${Date.now()}`,
+        userId: user.id,
         notes: [
           {
             id: `note-${Date.now()}`,
@@ -218,32 +261,32 @@ export default function App() {
         updatedAt: nowIso,
       };
       setTenants((prev) => [newTenant, ...prev]);
-      if (isSupabaseConfigured) {
-        upsertTenantToSupabase(newTenant);
-      }
-      showToast(language === 'ar' ? 'تم إضافة المستأجر وتوليد جدول الدفعات' : 'Tenant added and schedule generated');
+      await upsertTenantToSupabase(newTenant, user.id);
+      showToast(language === 'ar' ? 'تم إضافة المستأجر وحفظه في حسابك السحابي' : 'Tenant saved to your cloud account');
     }
 
     setEditingTenant(null);
   };
 
-  // 8. Handler: Delete Tenant
-  const handleDeleteTenant = (id: string) => {
+  // 9. Handler: Delete Tenant
+  const handleDeleteTenant = async (id: string) => {
     setTenants((prev) => prev.filter((t) => t.id !== id));
     if (isSupabaseConfigured) {
-      deleteTenantFromSupabase(id);
+      await deleteTenantFromSupabase(id);
     }
-    showToast(language === 'ar' ? 'تم حذف السجل' : 'Tenant record deleted');
+    showToast(language === 'ar' ? 'تم حذف السجل من قاعدة البيانات' : 'Tenant deleted from database');
   };
 
-  // 9. Handler: Add Follow-up Note
-  const handleAddNote = (tenantId: string, noteText: string) => {
+  // 10. Handler: Add Follow-up Note
+  const handleAddNote = async (tenantId: string, noteText: string) => {
     const nowIso = new Date().toISOString();
     const newNote = {
       id: `note-${Date.now()}`,
       timestamp: nowIso,
       text: noteText,
     };
+
+    let targetUpdated: TenantRecord | null = null;
 
     setTenants((prev) =>
       prev.map((t) => {
@@ -253,11 +296,9 @@ export default function App() {
             notes: [...(t.notes || []), newNote],
             updatedAt: nowIso,
           };
+          targetUpdated = updated;
           if (notesTenant && notesTenant.id === tenantId) {
             setNotesTenant(updated);
-          }
-          if (isSupabaseConfigured) {
-            upsertTenantToSupabase(updated);
           }
           return updated;
         }
@@ -265,11 +306,17 @@ export default function App() {
       })
     );
 
-    showToast(language === 'ar' ? 'تم حفظ الملاحظة في السجل' : 'Follow-up note logged');
+    if (targetUpdated && isSupabaseConfigured && user) {
+      await upsertTenantToSupabase(targetUpdated, user.id);
+    }
+
+    showToast(language === 'ar' ? 'تم حفظ الملاحظة في السجل السحابي' : 'Follow-up note logged');
   };
 
-  // 10. Handler: Toggle Milestone Paid
-  const handleToggleInstallmentPaid = (tenantId: string, installmentNumber: number) => {
+  // 11. Handler: Toggle Milestone Paid
+  const handleToggleInstallmentPaid = async (tenantId: string, installmentNumber: number) => {
+    let targetUpdated: TenantRecord | null = null;
+
     setTenants((prev) =>
       prev.map((t) => {
         if (t.id === tenantId) {
@@ -284,21 +331,23 @@ export default function App() {
             paidInstallments: updatedPaid,
             updatedAt: new Date().toISOString(),
           };
+          targetUpdated = updatedTenant;
 
           if (scheduleTenant && scheduleTenant.id === tenantId) {
             setScheduleTenant(updatedTenant);
-          }
-          if (isSupabaseConfigured) {
-            upsertTenantToSupabase(updatedTenant);
           }
           return updatedTenant;
         }
         return t;
       })
     );
+
+    if (targetUpdated && isSupabaseConfigured && user) {
+      await upsertTenantToSupabase(targetUpdated, user.id);
+    }
   };
 
-  // 11. Handler: Export JSON Backup
+  // 12. Handler: Export JSON Backup
   const handleExportData = () => {
     const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(tenants, null, 2));
     const downloadAnchor = document.createElement('a');
@@ -310,7 +359,7 @@ export default function App() {
     showToast(language === 'ar' ? 'تم تحميل ملف النسخة الاحتياطية' : 'Backup file downloaded');
   };
 
-  // 12. Handler: Import JSON Backup
+  // 13. Handler: Import JSON Backup
   const handleImportClick = () => {
     fileInputRef.current?.click();
   };
@@ -320,13 +369,19 @@ export default function App() {
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       try {
         const content = event.target?.result as string;
         const parsed = JSON.parse(content);
         if (Array.isArray(parsed)) {
           setTenants(parsed);
-          showToast(language === 'ar' ? 'تم استيراد البيانات بنجاح' : 'Data imported successfully');
+          // Sync imported records if logged in
+          if (isSupabaseConfigured && user) {
+            for (const item of parsed) {
+              await upsertTenantToSupabase(item, user.id);
+            }
+          }
+          showToast(language === 'ar' ? 'تم استيراد ومزامنة البيانات بنجاح' : 'Data imported and synced successfully');
         } else {
           alert('Invalid JSON file format');
         }
@@ -338,11 +393,11 @@ export default function App() {
     e.target.value = '';
   };
 
-  // 13. Handler: Reset to Sample Data
+  // 14. Handler: Clear / Reset Data
   const handleResetData = () => {
-    if (window.confirm(language === 'ar' ? 'هل تريد استعادة البيانات التجريبية الأولية؟' : 'Reset to sample tenants?')) {
-      setTenants(INITIAL_SAMPLE_TENANTS);
-      showToast(language === 'ar' ? 'تمت استعادة البيانات التجريبية' : 'Sample tenants loaded');
+    if (window.confirm(language === 'ar' ? 'هل تريد تصفير الشاشة والبدء بسجل فارغ؟' : 'Clear current records to zero?')) {
+      setTenants([]);
+      showToast(language === 'ar' ? 'تم تصفير البيانات بنجاح' : 'Data cleared to zero');
     }
   };
 
@@ -351,11 +406,23 @@ export default function App() {
       {/* Top Bar Header */}
       <Header
         language={language}
+        user={user}
         onToggleLanguage={toggleLanguage}
         onOpenAddTenant={() => {
+          if (!isSupabaseConfigured) {
+            setIsSupabaseConfigOpen(true);
+            return;
+          }
+          if (!user) {
+            setIsAuthOpen(true);
+            return;
+          }
           setEditingTenant(null);
           setIsFormOpen(true);
         }}
+        onOpenAuth={() => setIsAuthOpen(true)}
+        onSignOut={handleSignOut}
+        onOpenSupabaseConfig={() => setIsSupabaseConfigOpen(true)}
         onExportData={handleExportData}
         onImportData={handleImportClick}
         onResetData={handleResetData}
@@ -372,6 +439,122 @@ export default function App() {
 
       {/* Main Viewport */}
       <main className="max-w-7xl mx-auto px-3.5 sm:px-6 lg:px-8 py-3.5 sm:py-6 flex-1 w-full pb-28 md:pb-8">
+        
+        {/* Supabase Not Configured Warning Banner */}
+        {!isSupabaseConfigured && (
+          <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200/90 rounded-2xl p-4 sm:p-5 mb-4 sm:mb-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-2xs">
+            <div className="flex items-start sm:items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                <Database className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">
+                  {language === 'ar' ? 'اربط تطبيقك بقاعدة بيانات Supabase المباشرة' : 'Connect Your App to Live Supabase Database'}
+                </h3>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  {language === 'ar'
+                    ? 'أدخل رابط المشروع والمفتاح العام (anon key) لتفعيل تسجيل الدخول ومزامنة بيانات المستأجرين مع عزلة تامة لكل مستخدم.'
+                    : 'Provide your Project URL & anon key to enable user registration, email/Gmail login, and live cloud persistence.'}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setIsSupabaseConfigOpen(true)}
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 active:scale-95 text-white text-xs font-bold shadow-sm transition-all cursor-pointer whitespace-nowrap"
+            >
+              <Database className="w-4 h-4" />
+              <span>{language === 'ar' ? 'إعداد ربط Supabase الآن' : 'Configure Supabase Now'}</span>
+            </button>
+          </div>
+        )}
+
+        {/* User Not Logged In Callout (Data Isolation Guarantee) */}
+        {isSupabaseConfigured && !user && (
+          <div className="bg-white border border-slate-200/90 rounded-2xl p-5 sm:p-6 mb-5 sm:mb-6 shadow-sm">
+            <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
+              <div className="flex items-start gap-3.5">
+                <div className="w-11 h-11 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <ShieldCheck className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm sm:text-base font-bold text-slate-900">
+                      {language === 'ar' ? 'مساحة العمل السحابية الخاصة بك (Supabase Live)' : 'Private Cloud Workspace (Supabase Live)'}
+                    </h3>
+                    <span className="text-[10px] bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-full font-bold">
+                      {language === 'ar' ? 'عزل كامل للبيانات RLS' : 'Zero Data Sharing RLS'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-600 mt-1 max-w-2xl leading-relaxed">
+                    {language === 'ar'
+                      ? 'لكل مستخدم قاعدة بياناته الخاصة ومستأجروه المعزولون تماماً. سجل دخولك الآن بحساب Google / Gmail أو بالبريد الإلكتروني للوصول إلى سجلاتك وإضافة مستأجريك.'
+                      : 'Each user has their own isolated partition secured by Row Level Security. Sign in via Google/Gmail or Email to access your records and add tenants.'}
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-col sm:flex-row items-center gap-2.5 w-full lg:w-auto shrink-0">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await signInWithGoogle();
+                  }}
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold shadow-2xs transition-all active:scale-95 cursor-pointer"
+                >
+                  <svg className="w-4 h-4" viewBox="0 0 24 24">
+                    <path
+                      fill="#4285F4"
+                      d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                    />
+                    <path
+                      fill="#34A853"
+                      d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                    />
+                    <path
+                      fill="#FBBC05"
+                      d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                    />
+                    <path
+                      fill="#EA4335"
+                      d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+                    />
+                  </svg>
+                  <span>{language === 'ar' ? 'المتابعة بحساب Google' : 'Continue with Google'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsAuthOpen(true)}
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white text-xs font-bold shadow-sm transition-all cursor-pointer whitespace-nowrap"
+                >
+                  <LogIn className="w-4 h-4" />
+                  <span>{language === 'ar' ? 'تسجيل الدخول / إنشاء حساب' : 'Sign In / Register'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Logged in User Bar */}
+        {user && (
+          <div className="bg-emerald-50/60 border border-emerald-200/80 rounded-2xl px-4 py-3 mb-4 sm:mb-6 flex items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse" />
+              <span className="font-semibold text-slate-800">
+                {language === 'ar' ? 'أنت مسجل الدخول باسم:' : 'Logged in as:'}{' '}
+                <strong className="text-emerald-900">{user.name || user.email}</strong>
+              </span>
+              <span className="text-[11px] text-slate-500 font-mono hidden sm:inline">
+                ({user.email})
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] text-emerald-800 bg-white border border-emerald-200 px-2 py-0.5 rounded-md font-bold">
+                {language === 'ar' ? 'بياناتك السحابية خاصة' : 'Private Cloud Data'}
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* KPI Metric Dashboard Cards */}
         <DashboardStats
           metrics={metrics}
@@ -380,7 +563,7 @@ export default function App() {
           onSelectStatusFilter={setStatusFilter}
         />
 
-        {/* Filter & Search Bar - Mobile Native Ergonomics */}
+        {/* Filter & Search Bar */}
         <div className="bg-white p-3 sm:p-4 rounded-2xl border border-slate-200/90 shadow-2xs mb-4 sm:mb-6">
           <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4">
             {/* Search Input */}
@@ -396,14 +579,14 @@ export default function App() {
               {searchQuery && (
                 <button
                   onClick={() => setSearchQuery('')}
-                  className="absolute inset-y-0 end-3 flex items-center justify-center w-7 h-7 my-auto text-slate-400 hover:text-slate-600"
+                  className="absolute inset-y-0 end-3 flex items-center justify-center w-7 h-7 my-auto text-slate-400 hover:text-slate-600 cursor-pointer"
                 >
                   <X className="w-4 h-4" />
                 </button>
               )}
             </div>
 
-            {/* Filter Buttons Segmented Control (Smooth horizontal swipe on mobile) */}
+            {/* Filter Buttons Segmented Control */}
             <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0 scrollbar-none -mx-1 px-1">
               <button
                 onClick={() => setStatusFilter('all')}
@@ -464,7 +647,7 @@ export default function App() {
               <div className="hidden sm:flex items-center gap-1 p-0.5 ms-2 bg-slate-100 rounded-lg border border-slate-200/60">
                 <button
                   onClick={() => setViewMode('cards')}
-                  className={`p-1.5 rounded-md transition-all ${
+                  className={`p-1.5 rounded-md transition-all cursor-pointer ${
                     viewMode === 'cards'
                       ? 'bg-white text-slate-900 shadow-xs'
                       : 'text-slate-500 hover:text-slate-800'
@@ -475,7 +658,7 @@ export default function App() {
                 </button>
                 <button
                   onClick={() => setViewMode('table')}
-                  className={`p-1.5 rounded-md transition-all ${
+                  className={`p-1.5 rounded-md transition-all cursor-pointer ${
                     viewMode === 'table'
                       ? 'bg-white text-slate-900 shadow-xs'
                       : 'text-slate-500 hover:text-slate-800'
@@ -524,29 +707,60 @@ export default function App() {
             />
           )
         ) : (
-          /* Empty State */
-          <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-12 text-center">
-            <div className="w-12 h-12 rounded-xl bg-slate-100 text-slate-400 mx-auto flex items-center justify-center mb-3">
-              <Filter className="w-6 h-6" />
+          /* Empty State - Starts with 0 data */
+          <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-8 sm:p-14 text-center">
+            <div className="w-14 h-14 rounded-2xl bg-emerald-50 text-emerald-600 mx-auto flex items-center justify-center mb-4">
+              <Plus className="w-7 h-7" />
             </div>
             {tenants.length === 0 ? (
               <>
-                <h3 className="text-base font-bold text-slate-800 mb-1">
-                  {t.emptyState.noTenantsTitle}
+                <h3 className="text-base sm:text-lg font-bold text-slate-900 mb-1">
+                  {user 
+                    ? (language === 'ar' ? 'لا يوجد مستأجرين مضافين في حسابك حتى الآن' : 'No tenants added to your account yet')
+                    : (language === 'ar' ? 'سجل خالٍ - ابدأ بإضافة أول مستأجر' : 'Clean Slate - Add Your First Tenant')}
                 </h3>
-                <p className="text-xs text-slate-500 max-w-sm mx-auto mb-4">
-                  {t.emptyState.noTenantsDesc}
+                <p className="text-xs sm:text-sm text-slate-500 max-w-md mx-auto mb-5 leading-relaxed">
+                  {user
+                    ? (language === 'ar' 
+                        ? 'أضف أول مستأجر لتوليد جدول الاستحقاق وحساب مواعيد الدفعات تلقائياً.' 
+                        : 'Add your first tenant to automatically generate their installment schedule and track due dates.')
+                    : (language === 'ar'
+                        ? 'سجل دخولك أولاً لربط عقاراتك بحسابك المشفر في Supabase ومنع مشاركتها مع أي شخص آخر.'
+                        : 'Sign in to bind your tenants to your private cloud partition in Supabase.')}
                 </p>
-                <button
-                  onClick={() => {
-                    setEditingTenant(null);
-                    setIsFormOpen(true);
-                  }}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 shadow-sm transition-all"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>{t.emptyState.addFirstTenant}</span>
-                </button>
+                <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+                  {user ? (
+                    <button
+                      onClick={() => {
+                        setEditingTenant(null);
+                        setIsFormOpen(true);
+                      }}
+                      className="inline-flex items-center gap-2 px-5 py-2.5 text-xs sm:text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-sm transition-all active:scale-95 cursor-pointer"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>{t.emptyState.addFirstTenant}</span>
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => setIsAuthOpen(true)}
+                        className="inline-flex items-center gap-2 px-5 py-2.5 text-xs sm:text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-sm transition-all active:scale-95 cursor-pointer"
+                      >
+                        <LogIn className="w-4 h-4" />
+                        <span>{language === 'ar' ? 'تسجيل الدخول لإضافة مستأجر' : 'Sign In to Add Tenant'}</span>
+                      </button>
+                      {!isSupabaseConfigured && (
+                        <button
+                          onClick={() => setIsSupabaseConfigOpen(true)}
+                          className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-all cursor-pointer"
+                        >
+                          <Database className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>{language === 'ar' ? 'ربط Supabase' : 'Connect Supabase'}</span>
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
               </>
             ) : (
               <>
@@ -561,7 +775,7 @@ export default function App() {
                     setSearchQuery('');
                     setStatusFilter('all');
                   }}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-all"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-all cursor-pointer"
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
                   <span>{t.emptyState.clearFilters}</span>
@@ -617,12 +831,20 @@ export default function App() {
         onNoteLogged={handleAddNote}
       />
 
-      {/* Mobile App Bottom Navigation Bar (Fixed native tab bar with thumb ergonomics) */}
+      {/* Mobile App Bottom Navigation Bar */}
       <MobileBottomNav
         language={language}
         activeStatusFilter={statusFilter}
         onSelectStatusFilter={setStatusFilter}
         onOpenAddTenant={() => {
+          if (!isSupabaseConfigured) {
+            setIsSupabaseConfigOpen(true);
+            return;
+          }
+          if (!user) {
+            setIsAuthOpen(true);
+            return;
+          }
           setEditingTenant(null);
           setIsFormOpen(true);
         }}
@@ -635,10 +857,34 @@ export default function App() {
         isOpen={isMobileOptionsOpen}
         onClose={() => setIsMobileOptionsOpen(false)}
         language={language}
+        user={user}
+        onOpenAuth={() => setIsAuthOpen(true)}
+        onSignOut={handleSignOut}
+        onOpenSupabaseConfig={() => setIsSupabaseConfigOpen(true)}
         onToggleLanguage={toggleLanguage}
         onExportData={handleExportData}
         onImportData={handleImportClick}
         onResetData={handleResetData}
+      />
+
+      {/* User Authentication Modal (Email / Password & Google OAuth) */}
+      <AuthModal
+        isOpen={isAuthOpen}
+        onClose={() => setIsAuthOpen(false)}
+        language={language}
+        onAuthSuccess={(authUser) => {
+          setUser(authUser);
+          loadUserTenants(authUser.id);
+          showToast(language === 'ar' ? 'تم تسجيل الدخول بنجاح' : 'Signed in successfully');
+        }}
+        onOpenSupabaseConfig={() => setIsSupabaseConfigOpen(true)}
+      />
+
+      {/* Supabase Database Connection & SQL Schema Modal */}
+      <SupabaseConfigModal
+        isOpen={isSupabaseConfigOpen}
+        onClose={() => setIsSupabaseConfigOpen(false)}
+        language={language}
       />
     </div>
   );
