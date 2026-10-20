@@ -50,7 +50,9 @@ export const MobileOptionsSheet: React.FC<MobileOptionsSheetProps> = ({
             <div>
               <h3 className="font-bold text-slate-900 text-sm leading-none">{t.brandName}</h3>
               <span className="text-[10px] text-slate-500 font-medium">
-                {isSupabaseConfigured ? '🟢 Supabase Cloud Live' : '⚠️ Supabase Not Connected'}
+                {isSupabaseConfigured 
+                  ? (language === 'ar' ? '🟢 متصل بسحابة Supabase' : '🟢 Supabase Cloud Live')
+                  : (language === 'ar' ? '📱 وضع الحساب المحلي الآمن' : '📱 Secure Local Storage Mode')}
               </span>
             </div>
           </div>
@@ -122,9 +124,11 @@ export const MobileOptionsSheet: React.FC<MobileOptionsSheetProps> = ({
               <span>{language === 'ar' ? 'إعدادات ربط Supabase ومخطط SQL' : 'Supabase Settings & SQL Schema'}</span>
             </div>
             <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-              isSupabaseConfigured ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+              isSupabaseConfigured ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-700'
             }`}>
-              {isSupabaseConfigured ? (language === 'ar' ? 'متصل' : 'Connected') : (language === 'ar' ? 'ربط الآن' : 'Connect')}
+              {isSupabaseConfigured 
+                ? (language === 'ar' ? 'متصل' : 'Connected') 
+                : (language === 'ar' ? 'ربط السحابة' : 'Connect Cloud')}
             </span>
           </button>
 

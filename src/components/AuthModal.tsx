@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Lock, Mail, User, AlertCircle, CheckCircle, ArrowRight, ArrowLeft } from 'lucide-react';
+import { X, Lock, Mail, User, AlertCircle, CheckCircle, ArrowRight, ArrowLeft, ShieldCheck, Database, Smartphone } from 'lucide-react';
 import { Language, AuthUser } from '../types';
 import { signInWithEmail, signUpWithEmail, isSupabaseConfigured } from '../services/supabase';
 
@@ -33,7 +33,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setErrorMsg(null);
     setInfoMsg(null);
 
-    if (!email.trim() || !password) {
+    const cleanEmail = email.trim();
+    if (!cleanEmail || !password) {
       setErrorMsg(language === 'ar' ? 'يرجى إدخال البريد الإلكتروني وكلمة المرور' : 'Please enter email and password');
       return;
     }
@@ -45,33 +46,41 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
     setLoading(true);
 
-    if (mode === 'signin') {
-      const res = await signInWithEmail(email, password);
-      setLoading(false);
-      if (res.error) {
-        setErrorMsg(res.error);
-      } else if (res.user) {
-        onAuthSuccess(res.user);
-        onClose();
+    try {
+      if (mode === 'signin') {
+        const res = await signInWithEmail(cleanEmail, password);
+        setLoading(false);
+        if (res.error) {
+          setErrorMsg(res.error);
+        } else if (res.user) {
+          onAuthSuccess(res.user);
+          onClose();
+        }
+      } else {
+        const res = await signUpWithEmail(cleanEmail, password, fullName);
+        setLoading(false);
+        if (res.error) {
+          setErrorMsg(res.error);
+        } else if (res.needsEmailConfirmation) {
+          setInfoMsg(
+            language === 'ar' 
+              ? 'تم إنشاء الحساب بنجاح! يرجى مراجعة بريدك الإلكتروني لتأكيد التسجيل أو تسجيل الدخول مباشرة.' 
+              : 'Account created! Please check your email to confirm registration or sign in directly.'
+          );
+        } else if (res.user) {
+          onAuthSuccess(res.user);
+          onClose();
+        }
       }
-    } else {
-      const res = await signUpWithEmail(email, password, fullName);
+    } catch (err: any) {
       setLoading(false);
-      if (res.error) {
-        setErrorMsg(res.error);
-      } else if (res.needsEmailConfirmation) {
-        setInfoMsg(
-          language === 'ar' 
-            ? 'تم إنشاء الحساب بنجاح! يرجى مراجعة بريدك الإلكتروني لتأكيد التسجيل أو تسجيل الدخول مباشرة.' 
-            : 'Account created! Please check your email to confirm registration or sign in directly.'
-        );
-      } else if (res.user) {
-        onAuthSuccess(res.user);
-        onClose();
-      }
+      setErrorMsg(
+        language === 'ar'
+          ? 'حدث خطأ أثناء محاولة تسجيل الدخول. يرجى المحاولة مرة أخرى.'
+          : 'An unexpected error occurred. Please try again.'
+      );
     }
   };
-
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
@@ -90,11 +99,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 ? (language === 'ar' ? 'تسجيل الدخول' : 'Sign In') 
                 : (language === 'ar' ? 'إنشاء حساب جديد' : 'Create Account')}
             </h2>
-            <p className="text-xs text-slate-500 mt-0.5">
-              {language === 'ar' 
-                ? 'بيانات المستأجرين خاصة بك ومشفرة في Supabase' 
-                : 'Your tenant data is private and secured on Supabase'}
-            </p>
+            <div className="flex items-center gap-1.5 mt-0.5">
+              {isSupabaseConfigured ? (
+                <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700 font-medium">
+                  <Database className="w-3 h-3 text-emerald-600 shrink-0" />
+                  {language === 'ar' ? 'المزامنة السحابية (Supabase Live)' : 'Cloud Sync (Supabase Live)'}
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700 font-medium">
+                  <Smartphone className="w-3 h-3 text-emerald-600 shrink-0" />
+                  {language === 'ar' ? 'حساب محلي آمن (يعمل بدون إنترنت)' : 'Secure Local Account (Offline Ready)'}
+                </span>
+              )}
+            </div>
           </div>
           <button
             onClick={onClose}
@@ -104,50 +121,44 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </button>
         </div>
 
-        {/* Missing Supabase Keys Notice */}
+        {/* Local Mode Informational Notice (if Supabase is not connected) */}
         {!isSupabaseConfigured && (
-          <div className="m-4 p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800 flex flex-col gap-2">
-            <div className="flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-              <div>
-                <p className="font-semibold">
-                  {language === 'ar' ? 'مفاتيح Supabase غير مفعلة' : 'Supabase keys not configured'}
-                </p>
-                <p className="text-[11px] text-amber-700 mt-1">
-                  {language === 'ar'
-                    ? 'لتفعيل تسجيل الدخول وحفظ البيانات على السحابة، يرجى ربط Supabase.'
-                    : 'To enable authentication and live database persistence, connect Supabase.'}
-                </p>
-              </div>
+          <div className="mx-6 mt-4 p-3 rounded-xl bg-slate-50 border border-slate-200/90 text-xs text-slate-600 flex items-start gap-2.5">
+            <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+            <div className="flex-1 text-[11px] leading-relaxed">
+              <span>
+                {language === 'ar'
+                  ? 'يمكنك تسجيل الدخول أو إنشاء حساب محلي فوراً على هاتفك. بياناتك محفوظة بأمان.'
+                  : 'You can sign in or create an account right now. Your data is saved locally on your device.'}
+              </span>
+              {onOpenSupabaseConfig && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onOpenSupabaseConfig();
+                  }}
+                  className="block mt-1 font-bold text-emerald-700 hover:underline cursor-pointer"
+                >
+                  {language === 'ar' ? 'هل تود ربط قاعدة بيانات Supabase سحابية؟ اضغط هنا' : 'Want to connect a Supabase cloud database? Click here'}
+                </button>
+              )}
             </div>
-            {onOpenSupabaseConfig && (
-              <button
-                type="button"
-                onClick={() => {
-                  onClose();
-                  onOpenSupabaseConfig();
-                }}
-                className="w-full py-1.5 px-3 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] transition-colors cursor-pointer text-center"
-              >
-                {language === 'ar' ? 'ربط Supabase الآن (أدخل الرابط والمفتاح)' : 'Configure Supabase Now'}
-              </button>
-            )}
           </div>
         )}
 
         {/* Form Body */}
         <div className="p-6 space-y-4">
-
           {/* Error & Info Alerts */}
           {errorMsg && (
-            <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-700 flex items-start gap-2">
+            <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-700 flex items-start gap-2.5 leading-relaxed">
               <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
               <span>{errorMsg}</span>
             </div>
           )}
 
           {infoMsg && (
-            <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 flex items-start gap-2">
+            <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 flex items-start gap-2.5 leading-relaxed">
               <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
               <span>{infoMsg}</span>
             </div>
@@ -207,11 +218,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   className="w-full ps-9 pe-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600"
                 />
               </div>
+              <p className="text-[10px] text-slate-400 mt-1">
+                {language === 'ar' ? '6 أحرف على الأقل' : 'At least 6 characters'}
+              </p>
             </div>
 
             <button
               type="submit"
-              disabled={loading || !isSupabaseConfigured}
+              disabled={loading}
               className="w-full min-h-[46px] flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-bold text-xs sm:text-sm shadow-sm transition-all disabled:opacity-50 disabled:pointer-events-none cursor-pointer mt-2"
             >
               <span>

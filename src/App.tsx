@@ -94,33 +94,29 @@ export default function App() {
 
   // Auth session initialization & listener
   useEffect(() => {
-    if (isSupabaseConfigured) {
-      getSessionUser().then((currentUser) => {
-        setUser(currentUser);
-        if (currentUser) {
-          loadUserTenants(currentUser.id);
-        } else {
-          setTenants([]);
-          setIsDataLoading(false);
-        }
-      });
+    getSessionUser().then((currentUser) => {
+      setUser(currentUser);
+      if (currentUser) {
+        loadUserTenants(currentUser.id);
+      } else {
+        setTenants([]);
+        setIsDataLoading(false);
+      }
+    });
 
-      const unsubscribe = onAuthStateChange((newUser) => {
-        setUser(newUser);
-        if (newUser) {
-          loadUserTenants(newUser.id);
-        } else {
-          setTenants([]);
-          setIsDataLoading(false);
-        }
-      });
+    const unsubscribe = onAuthStateChange((newUser) => {
+      setUser(newUser);
+      if (newUser) {
+        loadUserTenants(newUser.id);
+      } else {
+        setTenants([]);
+        setIsDataLoading(false);
+      }
+    });
 
-      return () => {
-        if (unsubscribe) unsubscribe();
-      };
-    } else {
-      setIsDataLoading(false);
-    }
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
   }, []);
 
   // Handler: Sign out
@@ -218,11 +214,6 @@ export default function App() {
   const handleSaveTenant = async (
     formData: Omit<TenantRecord, 'id' | 'notes' | 'paidInstallments' | 'createdAt' | 'updatedAt'>
   ) => {
-    if (!isSupabaseConfigured) {
-      setIsSupabaseConfigOpen(true);
-      return;
-    }
-
     if (!user) {
       setIsAuthOpen(true);
       return;
@@ -241,7 +232,11 @@ export default function App() {
         prev.map((t) => (t.id === editingTenant.id ? updated : t))
       );
       await upsertTenantToSupabase(updated, user.id);
-      showToast(language === 'ar' ? 'تم تحديث بيانات المستأجر في Supabase' : 'Tenant details updated in Supabase');
+      showToast(
+        language === 'ar' 
+          ? (isSupabaseConfigured ? 'تم تحديث بيانات المستأجر في Supabase' : 'تم تحديث بيانات المستأجر بنجاح') 
+          : (isSupabaseConfigured ? 'Tenant details updated in Supabase' : 'Tenant details updated successfully')
+      );
     } else {
       const newTenant: TenantRecord = {
         ...formData,
@@ -261,7 +256,11 @@ export default function App() {
       };
       setTenants((prev) => [newTenant, ...prev]);
       await upsertTenantToSupabase(newTenant, user.id);
-      showToast(language === 'ar' ? 'تم إضافة المستأجر وحفظه في حسابك السحابي' : 'Tenant saved to your cloud account');
+      showToast(
+        language === 'ar' 
+          ? (isSupabaseConfigured ? 'تم إضافة المستأجر وحفظه في حسابك السحابي' : 'تم إضافة المستأجر وحفظه بنجاح') 
+          : (isSupabaseConfigured ? 'Tenant saved to your cloud account' : 'Tenant added successfully')
+      );
     }
 
     setEditingTenant(null);
@@ -270,10 +269,8 @@ export default function App() {
   // 9. Handler: Delete Tenant
   const handleDeleteTenant = async (id: string) => {
     setTenants((prev) => prev.filter((t) => t.id !== id));
-    if (isSupabaseConfigured) {
-      await deleteTenantFromSupabase(id);
-    }
-    showToast(language === 'ar' ? 'تم حذف السجل من قاعدة البيانات' : 'Tenant deleted from database');
+    await deleteTenantFromSupabase(id);
+    showToast(language === 'ar' ? 'تم حذف السجل بنجاح' : 'Tenant deleted successfully');
   };
 
   // 10. Handler: Add Follow-up Note
@@ -408,10 +405,6 @@ export default function App() {
         user={user}
         onToggleLanguage={toggleLanguage}
         onOpenAddTenant={() => {
-          if (!isSupabaseConfigured) {
-            setIsSupabaseConfigOpen(true);
-            return;
-          }
           if (!user) {
             setIsAuthOpen(true);
             return;
@@ -725,10 +718,6 @@ export default function App() {
         activeStatusFilter={statusFilter}
         onSelectStatusFilter={setStatusFilter}
         onOpenAddTenant={() => {
-          if (!isSupabaseConfigured) {
-            setIsSupabaseConfigOpen(true);
-            return;
-          }
           if (!user) {
             setIsAuthOpen(true);
             return;

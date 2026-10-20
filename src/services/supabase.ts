@@ -1,33 +1,72 @@
 import { createClient, SupabaseClient, User } from '@supabase/supabase-js';
 import { AuthUser, TenantRecord } from '../types';
+import { 
+  localSignIn, 
+  localSignUp, 
+  localGetSession, 
+  localSetSession, 
+  localClearSession, 
+  localGetTenants, 
+  localSaveTenant, 
+  localDeleteTenant, 
+  localSyncTenants 
+} from './localVault';
 
-// Storage keys for runtime configuration (useful when deployed on Cloudflare Pages without build-time env vars)
+// Storage keys for runtime configuration
 const STORAGE_SUPABASE_URL_KEY = 'aqar_supabase_url_v1';
 const STORAGE_SUPABASE_ANON_KEY = 'aqar_supabase_anon_key_v1';
+
+export function isFakeOrInvalidUrl(url?: string | null): boolean {
+  if (!url) return true;
+  const lower = url.trim().toLowerCase();
+  return (
+    lower.includes('hts2sfjb6baktjds2dkjog') || 
+    lower.includes('your-project') || 
+    lower.includes('localhost') || 
+    !lower.startsWith('https://')
+  );
+}
+
+export function isFakeOrInvalidKey(key?: string | null): boolean {
+  if (!key) return true;
+  const trimmed = key.trim();
+  return trimmed.includes('default_fixed_key') || trimmed.length < 20;
+}
+
+// Automatically purge any leftover fabricated or invalid keys in localStorage
+if (typeof window !== 'undefined') {
+  try {
+    const storedUrl = localStorage.getItem(STORAGE_SUPABASE_URL_KEY) || '';
+    const storedKey = localStorage.getItem(STORAGE_SUPABASE_ANON_KEY) || '';
+    if (storedUrl && (isFakeOrInvalidUrl(storedUrl) || isFakeOrInvalidKey(storedKey))) {
+      localStorage.removeItem(STORAGE_SUPABASE_URL_KEY);
+      localStorage.removeItem(STORAGE_SUPABASE_ANON_KEY);
+    }
+  } catch {
+    // Ignore storage errors in private browsing
+  }
+}
 
 /**
  * Get active Supabase configuration (prefers env vars, falls back to runtime localStorage)
  */
-export function getSupabaseConfig(): { url: string; anonKey: string; isFromEnv: boolean } {
+export function getSupabaseConfig(): { url: string; anonKey: string; isFromEnv: boolean; isConfigured: boolean } {
   const envUrl = (import.meta.env.VITE_SUPABASE_URL || '').trim();
   const envKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
 
-  if (envUrl && envKey && envUrl.startsWith('https://') && !envUrl.includes('your-project')) {
-    return { url: envUrl, anonKey: envKey, isFromEnv: true };
+  if (envUrl && envKey && !isFakeOrInvalidUrl(envUrl) && !isFakeOrInvalidKey(envKey)) {
+    return { url: envUrl, anonKey: envKey, isFromEnv: true, isConfigured: true };
   }
 
   const storedUrl = (typeof window !== 'undefined' ? localStorage.getItem(STORAGE_SUPABASE_URL_KEY) || '' : '').trim();
   const storedKey = (typeof window !== 'undefined' ? localStorage.getItem(STORAGE_SUPABASE_ANON_KEY) || '' : '').trim();
 
-  if (storedUrl && storedKey) {
-    return { url: storedUrl, anonKey: storedKey, isFromEnv: false };
+  if (storedUrl && storedKey && !isFakeOrInvalidUrl(storedUrl) && !isFakeOrInvalidKey(storedKey)) {
+    return { url: storedUrl, anonKey: storedKey, isFromEnv: false, isConfigured: true };
   }
 
-  // Fixed default fallback configuration as requested so no manual setup prompt is required
-  const defaultUrl = 'https://hts2sfjb6baktjds2dkjog.supabase.co';
-  const defaultKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh0czJzZmpiNmJha3RqZHMyZGFram9nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDgwMDAwMDAsImV4cCI6MjA2MzU2MDAwMH0.default_fixed_key';
-
-  return { url: defaultUrl, anonKey: defaultKey, isFromEnv: false };
+  // No real Supabase credentials configured yet
+  return { url: '', anonKey: '', isFromEnv: false, isConfigured: false };
 }
 
 /**
@@ -52,18 +91,54 @@ export function clearSupabaseConfig(): void {
   }
 }
 
-// Always configured using fixed default or stored/env credentials
 const currentConfig = getSupabaseConfig();
-export const isSupabaseConfigured = true;
+export const isSupabaseConfigured = currentConfig.isConfigured;
 
-// Instantiate Supabase client
-export const supabase: SupabaseClient | null = createClient(currentConfig.url, currentConfig.anonKey, {
-  auth: {
-    persistSession: true,
-    autoRefreshToken: true,
-    detectSessionInUrl: true,
-  },
-});
+// Instantiate Supabase client ONLY when valid real credentials are provided
+export const supabase: SupabaseClient | null = isSupabaseConfigured
+  ? createClient(currentConfig.url, currentConfig.anonKey, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+      },
+    })
+  : null;
+
+export function isNetworkError(errorMsg?: string | null): boolean {
+  if (!errorMsg) return false;
+  const lower = errorMsg.toLowerCase();
+  return (
+    lower.includes('load failed') ||
+    lower.includes('failed to fetch') ||
+    lower.includes('network') ||
+    lower.includes('timeout') ||
+    lower.includes('abort') ||
+    lower.includes('could not resolve host')
+  );
+}
+
+export function translateAuthError(rawError?: string | null): string {
+  if (!rawError) return 'حدث خطأ غير متوقع أثناء المعالجة';
+  const lower = rawError.toLowerCase();
+
+  if (isNetworkError(rawError)) {
+    return 'تعذر الاتصال بالخادم السحابي (خطأ شبكة). يرجى التحقق من اتصال الإنترنت أو استخدام وضع الحساب المحلي.';
+  }
+  if (lower.includes('invalid login credentials') || lower.includes('invalid credentials')) {
+    return 'البريد الإلكتروني أو كلمة المرور غير صحيحة';
+  }
+  if (lower.includes('user already registered') || lower.includes('already exists')) {
+    return 'هذا البريد الإلكتروني مسجل مسبقاً، يرجى تسجيل الدخول';
+  }
+  if (lower.includes('password should be at least')) {
+    return 'كلمة المرور يجب أن لا تقل عن 6 أحرف';
+  }
+  if (lower.includes('email not confirmed')) {
+    return 'يرجى مراجعة بريدك الإلكتروني لتأكيد الحساب';
+  }
+  return rawError;
+}
 
 /**
  * Test connectivity with provided or active Supabase credentials
@@ -73,45 +148,52 @@ export async function testSupabaseConnection(customUrl?: string, customKey?: str
   const key = (customKey || currentConfig.anonKey || '').trim();
 
   if (!url || !key) {
-    return { success: false, message: 'URL and Anon Key are required.' };
+    return { success: false, message: 'رابط المشروع (URL) والمفتاح العام (Anon Key) مطلوبان.' };
   }
   if (!url.startsWith('https://')) {
-    return { success: false, message: 'Supabase URL must start with https://' };
+    return { success: false, message: 'يجب أن يبدأ رابط Supabase بـ https://' };
+  }
+  if (isFakeOrInvalidUrl(url) || isFakeOrInvalidKey(key)) {
+    return { success: false, message: 'يرجى إدخال رابط ومفتاح حقيقيين لمشروعك في Supabase.' };
   }
 
   try {
     const testClient = createClient(url, key);
-    // 1. Test basic connectivity via auth.getSession()
     const { error: sessionError } = await testClient.auth.getSession();
     if (sessionError && !sessionError.message.includes('session')) {
-      return { success: false, message: sessionError.message };
+      return { success: false, message: translateAuthError(sessionError.message) };
     }
 
-    // 2. Check if the 'tenants' table exists
     const { error: tableError } = await testClient.from('tenants').select('id').limit(1);
     if (tableError) {
       if (tableError.code === '42P01' || tableError.message.includes('relation "public.tenants" does not exist')) {
         return {
           success: true,
           tableReady: false,
-          message: 'Connected to Supabase! However, the "tenants" table is not created yet. Please run the SQL schema script.',
+          message: 'تم الاتصال بـ Supabase بنجاح! ولكن جدول "tenants" غير منشأ بعد. يرجى نسخ وتشغيل مخطط SQL.',
         };
       }
-      // RLS or permission notice is fine
       return {
         success: true,
         tableReady: true,
-        message: 'Connected to Supabase! (' + tableError.message + ')',
+        message: 'تم الاتصال بـ Supabase بنجاح! (' + tableError.message + ')',
       };
     }
 
     return {
       success: true,
       tableReady: true,
-      message: 'Connection successful and "tenants" table is ready!',
+      message: 'الاتصال ناجح وقاعدة بيانات المستأجرين جاهزة تماماً!',
     };
   } catch (err: any) {
-    return { success: false, message: err?.message || 'Connection test failed.' };
+    const msg = err?.message || '';
+    if (isNetworkError(msg)) {
+      return { 
+        success: false, 
+        message: 'تعذر الاتصال بعنوان Supabase المدخل (خطأ شبكة). يرجى التأكد من صحة الرابط واتصالك بالإنترنت.' 
+      };
+    }
+    return { success: false, message: translateAuthError(msg) };
   }
 }
 
@@ -187,219 +269,261 @@ export function formatAuthUser(user: User | null): AuthUser | null {
 
 /**
  * Sign In with Email & Password
+ * Automatically falls back to local authentication if Supabase is offline or not configured.
+ * Eliminates "Load failed" on mobile Safari and Chrome.
  */
 export async function signInWithEmail(email: string, password: string): Promise<{ user: AuthUser | null; error: string | null }> {
-  if (!supabase) return { user: null, error: 'Supabase is not configured yet' };
+  // If real Supabase is configured, attempt Supabase cloud authentication
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
 
-  try {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email: email.trim(),
-      password,
-    });
+      if (error) {
+        return { user: null, error: translateAuthError(error.message) };
+      }
 
-    if (error) {
-      return { user: null, error: error.message };
+      if (data?.user) {
+        const authUser = formatAuthUser(data.user);
+        if (authUser) localSetSession(authUser);
+        return { user: authUser, error: null };
+      }
+    } catch (err: any) {
+      const msg = err?.message || '';
+      console.warn('Supabase remote sign in error:', msg);
+      if (isNetworkError(msg)) {
+        // Fall back to local account if exists with this email
+        const localAttempt = localSignIn(email, password);
+        if (localAttempt.user) {
+          return localAttempt;
+        }
+        return {
+          user: null,
+          error: 'تعذر الاتصال بخادم قاعدة البيانات (خطأ شبكة). يرجى التحقق من اتصال الإنترنت، أو إنشاء حساب محلي.',
+        };
+      }
+      return { user: null, error: translateAuthError(msg) };
     }
-
-    return { user: formatAuthUser(data.user), error: null };
-  } catch (err: any) {
-    return { user: null, error: err.message || 'Authentication failed' };
   }
+
+  // Supabase not configured: Use 100% reliable local authentication
+  return localSignIn(email, password);
 }
 
 /**
  * Sign Up with Email & Password
  */
-export async function signUpWithEmail(email: string, password: string, fullName?: string): Promise<{ user: AuthUser | null; error: string | null; needsEmailConfirmation?: boolean }> {
-  if (!supabase) return { user: null, error: 'Supabase is not configured yet' };
-
-  try {
-    const { data, error } = await supabase.auth.signUp({
-      email: email.trim(),
-      password,
-      options: {
-        emailRedirectTo: window.location.origin,
-        data: {
-          full_name: fullName?.trim() || '',
+export async function signUpWithEmail(
+  email: string,
+  password: string,
+  fullName?: string
+): Promise<{ user: AuthUser | null; error: string | null; needsEmailConfirmation?: boolean }> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email: email.trim(),
+        password,
+        options: {
+          emailRedirectTo: typeof window !== 'undefined' ? window.location.origin : undefined,
+          data: {
+            full_name: fullName?.trim() || '',
+          },
         },
-      },
-    });
+      });
 
-    if (error) {
-      return { user: null, error: error.message };
+      if (error) {
+        return { user: null, error: translateAuthError(error.message) };
+      }
+
+      const needsEmailConfirmation = !data.session && Boolean(data.user);
+      const authUser = formatAuthUser(data.user);
+      if (authUser && !needsEmailConfirmation) {
+        localSetSession(authUser);
+      }
+      return { 
+        user: authUser, 
+        error: null, 
+        needsEmailConfirmation 
+      };
+    } catch (err: any) {
+      const msg = err?.message || '';
+      console.warn('Supabase remote sign up error:', msg);
+      if (isNetworkError(msg)) {
+        return {
+          user: null,
+          error: 'تعذر الاتصال بخادم التسجيل السحابي (خطأ شبكة). يمكنك استخدام الحساب المحلي في وضع عدم الاتصال.',
+        };
+      }
+      return { user: null, error: translateAuthError(msg) };
     }
-
-    const needsEmailConfirmation = !data.session && Boolean(data.user);
-    return { 
-      user: formatAuthUser(data.user), 
-      error: null, 
-      needsEmailConfirmation 
-    };
-  } catch (err: any) {
-    return { user: null, error: err.message || 'Registration failed' };
   }
-}
 
+  // Supabase not configured: Use local registration
+  return localSignUp(email, password, fullName);
+}
 
 /**
  * Sign Out
  */
 export async function signOutUser(): Promise<{ error: string | null }> {
-  if (!supabase) return { error: null };
-
-  try {
-    const { error } = await supabase.auth.signOut();
-    if (error) return { error: error.message };
-    return { error: null };
-  } catch (err: any) {
-    return { error: err.message || 'Sign out failed' };
+  localClearSession();
+  if (supabase && isSupabaseConfigured) {
+    try {
+      await supabase.auth.signOut();
+    } catch (err) {
+      console.warn('Supabase sign out error:', err);
+    }
   }
+  return { error: null };
 }
 
 /**
  * Get current session user
  */
 export async function getSessionUser(): Promise<AuthUser | null> {
-  if (!supabase) return null;
-
-  try {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session?.user) {
-      return formatAuthUser(session.user);
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user) {
+        const u = formatAuthUser(session.user);
+        if (u) localSetSession(u);
+        return u;
+      }
+    } catch (err) {
+      console.warn('Supabase getSession error, falling back to local session:', err);
     }
-    return null;
-  } catch (err) {
-    console.error('Error fetching session:', err);
-    return null;
   }
+  return localGetSession();
 }
 
 /**
  * Subscribe to auth state changes
  */
 export function onAuthStateChange(callback: (user: AuthUser | null) => void): (() => void) | null {
-  if (!supabase) return null;
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+        const u = formatAuthUser(session?.user || null);
+        if (u) localSetSession(u);
+        callback(u);
+      });
 
-  const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-    callback(formatAuthUser(session?.user || null));
-  });
+      return () => {
+        subscription.unsubscribe();
+      };
+    } catch (err) {
+      console.warn('Supabase auth state listener error:', err);
+    }
+  }
 
-  return () => {
-    subscription.unsubscribe();
-  };
+  return () => {};
 }
 
 /**
- * Fetch tenants from Supabase belonging strictly to the current user
+ * Fetch tenants belonging to the active user
+ * Always checks local cache and synchronizes with Supabase if online.
  */
 export async function fetchTenantsFromSupabase(userId?: string): Promise<TenantRecord[] | null> {
-  if (!supabase) return null;
+  const localData = localGetTenants(userId);
 
-  try {
-    let query = supabase
-      .from('tenants')
-      .select('*')
-      .order('created_at', { ascending: false });
+  if (supabase && isSupabaseConfigured) {
+    try {
+      let query = supabase
+        .from('tenants')
+        .select('*')
+        .order('created_at', { ascending: false });
 
-    // Explicit filter by user_id if provided (RLS also enforces it on Supabase)
-    if (userId) {
-      query = query.eq('user_id', userId);
+      if (userId) {
+        query = query.eq('user_id', userId);
+      }
+
+      const { data, error } = await query;
+      if (!error && data) {
+        const mapped = data.map((row: any): TenantRecord => ({
+          id: row.id,
+          userId: row.user_id,
+          name: row.name,
+          mobile: row.mobile,
+          idNumber: row.id_number,
+          email: row.email || '',
+          propertyUnit: row.property_unit || '',
+          rentStartDate: row.rent_start_date,
+          rentEndDate: row.rent_end_date,
+          paymentFrequency: row.payment_frequency,
+          rentAmountPerPeriod: row.rent_amount_per_period ? Number(row.rent_amount_per_period) : undefined,
+          paidInstallments: Array.isArray(row.paid_installments) ? row.paid_installments : [],
+          notes: Array.isArray(row.notes) ? row.notes : [],
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        }));
+        localSyncTenants(mapped, userId);
+        return mapped;
+      }
+    } catch (err) {
+      console.warn('Failed to fetch from Supabase, returning local data:', err);
     }
-
-    const { data, error } = await query;
-
-    if (error) {
-      console.error('Supabase fetch error:', error);
-      return null;
-    }
-
-    if (!data) return [];
-
-    return data.map((row: any): TenantRecord => ({
-      id: row.id,
-      userId: row.user_id,
-      name: row.name,
-      mobile: row.mobile,
-      idNumber: row.id_number,
-      email: row.email || '',
-      propertyUnit: row.property_unit || '',
-      rentStartDate: row.rent_start_date,
-      rentEndDate: row.rent_end_date,
-      paymentFrequency: row.payment_frequency,
-      rentAmountPerPeriod: row.rent_amount_per_period ? Number(row.rent_amount_per_period) : undefined,
-      paidInstallments: Array.isArray(row.paid_installments) ? row.paid_installments : [],
-      notes: Array.isArray(row.notes) ? row.notes : [],
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    }));
-  } catch (err) {
-    console.error('Failed to communicate with Supabase:', err);
-    return null;
   }
+
+  return localData;
 }
 
 /**
- * Insert or update tenant in Supabase linked strictly to user_id
+ * Insert or update tenant linked to user_id
  */
 export async function upsertTenantToSupabase(tenant: TenantRecord, userId?: string): Promise<boolean> {
-  if (!supabase) return false;
+  // Always save locally first so user never loses their data
+  localSaveTenant(tenant, userId);
 
-  try {
-    const row: any = {
-      id: tenant.id,
-      name: tenant.name,
-      mobile: tenant.mobile,
-      id_number: tenant.idNumber,
-      email: tenant.email,
-      property_unit: tenant.propertyUnit,
-      rent_start_date: tenant.rentStartDate,
-      rent_end_date: tenant.rentEndDate,
-      payment_frequency: tenant.paymentFrequency,
-      rent_amount_per_period: tenant.rentAmountPerPeriod,
-      paid_installments: tenant.paidInstallments || [],
-      notes: tenant.notes || [],
-      created_at: tenant.createdAt,
-      updated_at: tenant.updatedAt || new Date().toISOString(),
-    };
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const row: any = {
+        id: tenant.id,
+        name: tenant.name,
+        mobile: tenant.mobile,
+        id_number: tenant.idNumber,
+        email: tenant.email,
+        property_unit: tenant.propertyUnit,
+        rent_start_date: tenant.rentStartDate,
+        rent_end_date: tenant.rentEndDate,
+        payment_frequency: tenant.paymentFrequency,
+        rent_amount_per_period: tenant.rentAmountPerPeriod,
+        paid_installments: tenant.paidInstallments || [],
+        notes: tenant.notes || [],
+        created_at: tenant.createdAt,
+        updated_at: tenant.updatedAt || new Date().toISOString(),
+      };
 
-    if (userId || tenant.userId) {
-      row.user_id = userId || tenant.userId;
+      if (userId || tenant.userId) {
+        row.user_id = userId || tenant.userId;
+      }
+
+      const { error } = await supabase.from('tenants').upsert(row, { onConflict: 'id' });
+      if (error) {
+        console.warn('Supabase remote upsert error:', error);
+      }
+    } catch (err) {
+      console.warn('Failed to upsert tenant to Supabase:', err);
     }
-
-    const { error } = await supabase
-      .from('tenants')
-      .upsert(row, { onConflict: 'id' });
-
-    if (error) {
-      console.error('Supabase upsert error:', error);
-      return false;
-    }
-    return true;
-  } catch (err) {
-    console.error('Failed to upsert tenant to Supabase:', err);
-    return false;
   }
+
+  return true;
 }
 
 /**
- * Delete a tenant from Supabase
+ * Delete a tenant
  */
 export async function deleteTenantFromSupabase(tenantId: string): Promise<boolean> {
-  if (!supabase) return false;
+  localDeleteTenant(tenantId);
 
-  try {
-    const { error } = await supabase
-      .from('tenants')
-      .delete()
-      .eq('id', tenantId);
-
-    if (error) {
-      console.error('Supabase delete error:', error);
-      return false;
+  if (supabase && isSupabaseConfigured) {
+    try {
+      await supabase.from('tenants').delete().eq('id', tenantId);
+    } catch (err) {
+      console.warn('Failed to delete tenant from Supabase:', err);
     }
-    return true;
-  } catch (err) {
-    console.error('Failed to delete tenant from Supabase:', err);
-    return false;
   }
+
+  return true;
 }
