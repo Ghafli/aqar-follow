@@ -65,8 +65,11 @@ export function getSupabaseConfig(): { url: string; anonKey: string; isFromEnv: 
     return { url: storedUrl, anonKey: storedKey, isFromEnv: false, isConfigured: true };
   }
 
-  // No real Supabase credentials configured yet
-  return { url: '', anonKey: '', isFromEnv: false, isConfigured: false };
+  // User's verified Supabase project configuration
+  const defaultUrl = 'https://indcmioifsaegweemdra.supabase.co';
+  const defaultKey = 'sb_publishable_MpMPeswLeckYuj40QM0Z8g_fSNOUS96';
+
+  return { url: defaultUrl, anonKey: defaultKey, isFromEnv: false, isConfigured: true };
 }
 
 /**
