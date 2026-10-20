@@ -240,26 +240,6 @@ export async function signUpWithEmail(email: string, password: string, fullName?
   }
 }
 
-/**
- * Sign In with Google / Gmail OAuth
- */
-export async function signInWithGoogle(): Promise<{ error: string | null }> {
-  if (!supabase) return { error: 'Supabase is not configured yet' };
-
-  try {
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: window.location.origin,
-      },
-    });
-
-    if (error) return { error: error.message };
-    return { error: null };
-  } catch (err: any) {
-    return { error: err.message || 'Google authentication failed' };
-  }
-}
 
 /**
  * Sign Out

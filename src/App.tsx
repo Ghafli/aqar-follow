@@ -46,8 +46,7 @@ import {
   deleteTenantFromSupabase,
   getSessionUser,
   signOutUser,
-  onAuthStateChange,
-  signInWithGoogle
+  onAuthStateChange
 } from './services/supabase';
 
 const LANG_STORAGE_KEY = 'aqar_language_pref_v1';
